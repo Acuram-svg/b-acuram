@@ -235,6 +235,17 @@ async function initializeDatabase() {
 
 initializeDatabase();
 
+app.get("/", (_req, res) => {
+  res.json({
+    status: "ok",
+    message: "Backend is live. Use /api/apps for products.",
+  });
+});
+
+app.get("/health", (_req, res) => {
+  res.json({ status: "healthy" });
+});
+
 // ===== Auth Routes =====
 app.post("/api/auth/signup", async (req, res) => {
   const { name, email, password } = req.body;
