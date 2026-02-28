@@ -138,8 +138,31 @@ const AppSchema = new mongoose.Schema({
   image: { type: String, required: true, trim: true },
 }, { timestamps: true });
 
+const OrderSchema = new mongoose.Schema({
+  customerName: { type: String, required: true, trim: true },
+  customerEmail: { type: String, required: true, trim: true, lowercase: true },
+  customerPhone: { type: String, required: true, trim: true },
+  customerLocation: { type: String, required: true, trim: true },
+  items: [
+    {
+      productId: { type: mongoose.Schema.Types.ObjectId, ref: "AppItem", required: true },
+      name: { type: String, required: true },
+      price: { type: Number, required: true, min: 0 },
+      quantity: { type: Number, required: true, min: 1 },
+      image: { type: String, required: true },
+    }
+  ],
+  totalAmount: { type: Number, required: true, min: 0 },
+  status: {
+    type: String,
+    enum: ["pending", "processing", "completed", "cancelled"],
+    default: "pending",
+  },
+}, { timestamps: true });
+
 const User = mongoose.model("User", UserSchema);
 const AppItem = mongoose.model("AppItem", AppSchema);
+const Order = mongoose.model("Order", OrderSchema);
 
 function normalizeEmail(email = "") {
   return String(email).trim().toLowerCase();
@@ -414,6 +437,98 @@ app.delete("/api/apps/:id", requireAuth, requireAdmin, async (req, res) => {
       return res.status(404).json({ error: "App not found." });
     }
     res.json({ message: "App deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===== Orders =====
+app.post("/api/orders", async (req, res) => {
+  const {
+    customerName,
+    customerEmail,
+    customerPhone,
+    customerLocation,
+    items
+  } = req.body;
+
+  if (!customerName || !customerEmail || !customerPhone || !customerLocation) {
+    return res.status(400).json({ error: "Customer name, email, phone, and location are required." });
+  }
+
+  if (!Array.isArray(items) || !items.length) {
+    return res.status(400).json({ error: "Cart items are required." });
+  }
+
+  try {
+    const requestedIds = items.map((item) => item.productId).filter(Boolean);
+    const productDocs = await AppItem.find({ _id: { $in: requestedIds } });
+    const productMap = new Map(productDocs.map((product) => [product._id.toString(), product]));
+
+    const orderItems = [];
+    let totalAmount = 0;
+
+    for (const item of items) {
+      const product = productMap.get(String(item.productId));
+      const quantity = Number(item.quantity || 1);
+      if (!product || quantity < 1) continue;
+
+      orderItems.push({
+        productId: product._id,
+        name: product.name,
+        price: product.price,
+        quantity,
+        image: product.image,
+      });
+      totalAmount += product.price * quantity;
+    }
+
+    if (!orderItems.length) {
+      return res.status(400).json({ error: "No valid products found in cart." });
+    }
+
+    const newOrder = await Order.create({
+      customerName,
+      customerEmail: normalizeEmail(customerEmail),
+      customerPhone,
+      customerLocation,
+      items: orderItems,
+      totalAmount,
+      status: "pending",
+    });
+
+    res.json(newOrder);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/orders", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const orders = await Order.find().sort({ createdAt: -1 });
+    res.json(orders);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/orders/:id/status", requireAuth, requireAdmin, async (req, res) => {
+  const { status } = req.body;
+  const allowed = new Set(["pending", "processing", "completed", "cancelled"]);
+  if (!allowed.has(status)) {
+    return res.status(400).json({ error: "Invalid status value." });
+  }
+
+  try {
+    const updatedOrder = await Order.findByIdAndUpdate(
+      req.params.id,
+      { status },
+      { new: true }
+    );
+    if (!updatedOrder) {
+      return res.status(404).json({ error: "Order not found." });
+    }
+    res.json(updatedOrder);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
